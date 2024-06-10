@@ -1,0 +1,1006 @@
+clear all;
+% 배열 크기 및 set 설정 (배열 크기 수정 필요)
+
+% Assigning the resistance of R_low and R_high for 1 and 0 respectively
+R_h = 1004000;
+R_l = 4000;
+% Assigning sense resistor value
+R_Sense = 1000;
+
+% Choosing the accuracy of the simulated results
+pass = 0.0001;
+
+%pass step size
+step_size = 0.01;
+
+% 배열 크기 설정
+array_sizes = [16,32,64,128];
+
+R_WL = 10;
+R_BL = 10;
+
+% 산포 값을 0부터 0.1까지 0.02씩 증가시키기
+std_dev = 0.1;
+% OTS_Vth_mean 값을 2.95부터 3.55까지 0.15씩 증가시키기
+OTS_Vth_means = 2.95:0.15:3.55;
+
+
+% 결과 저장을 위한 배열
+Vapp_rst_max = zeros(length(OTS_Vth_means), length(array_sizes));
+Vapp_rst_min = zeros(length(OTS_Vth_means), length(array_sizes));
+Vapp_set_max = zeros(length(OTS_Vth_means), length(array_sizes));
+Vapp_set_min = zeros(length(OTS_Vth_means), length(array_sizes));
+
+
+for k = 1:length(array_sizes)
+    m = array_sizes(k);
+    n = array_sizes(k);
+
+
+   for i = 1:length(OTS_Vth_means)
+       OTS_Vth_mean = OTS_Vth_means(i);
+
+
+      % OTS_Vth에 random variation 추가
+      OTS_Vth = normrnd(OTS_Vth_mean, std_dev, m, n); % m x n array assign random variation
+      R(1:m,1:n) = 1;
+      Read_row = m;
+      Read_coloumn = n;
+      R(Read_row, Read_coloumn) = 0;
+
+
+      % sigma level
+      RBER = 1 / (m * n);
+      RBER_sig = -norminv(RBER);
+
+
+      % worst case cell(m,n) has maximum OTS_Vth
+      OTS_Vth(m,n) = RBER_sig * std_dev + OTS_Vth_mean;
+
+
+      OTS_Ith = 1e-6;
+      Vth_SET = OTS_Vth + OTS_Ith * R_l;
+      Vth_RESET = OTS_Vth + OTS_Ith * R_h;
+
+      % Poole equation
+      q = 1.6e-19;
+      A = 9e-16;
+      NTtot = 4.6e24;
+      T0 = 1e-15;
+      kT = 0.026;
+      ua = 300e-10;
+      dz = 6e-9;
+
+      % Poole equation
+      Ea = @(Vth) 0.1*Vth+0.2125;
+      poole = @(V,Vth) 2*q*A*NTtot*dz/T0*exp(-Ea(Vth)/0.026)*sinh((V)*dz/kT/2/ua);
+      poole_rst = @(V,Vth) 2*q*A*NTtot*dz/T0*exp(-Ea(Vth)/0.026)*sinh(V*dz/kT/2/ua)*((-4)/(Vth^2-3.47*Vth+3.01035)*V^2+(-3.47)*(-4)/(Vth^2-3.47*Vth+3.01035)*V+(5+3.01035*(-4)/(Vth^2-3.47*Vth+3.01035)));
+
+      % Assigning the sense resistors for WL and BL
+      R_S_WL1(1:m) = 10;
+      R_S_WL1(Read_row) = 10;
+      R_S_BL1(1:n) = 10;
+      R_S_BL1(Read_coloumn) = R_Sense;
+      R_S_WL2(1:m) = 10^8;
+      R_S_BL2(1:n) = 10^8;
+
+      V_APP_WL2(1:m) = 0;
+      V_APP_WL2(Read_row) = 0;
+      V_APP_BL2(1:n) = 0;
+      V_APP_BL2(Read_coloumn) = 0;
+
+      % 초기화
+      V = zeros(m, n);
+      error = 2;
+      Vapp = Vth_RESET(m,n); % Selected cell의 Vth값 초기화
+      step_size = 0.01;
+    
+      while step_size > 0.00001
+      % Vth_SET과 Vth_RESET을 select셀의 상태에 따라서 수동으로 바꿔주세요
+      V(m,n) = 0;
+      while V(m,n) < Vth_RESET(m,n)
+          % Assigning applied voltages at the WLs and BLs
+          V_APP_WL1(1:m) = Vapp/2;
+          V_APP_WL1(Read_row) = Vapp;
+          V_APP_BL1(1:n) = Vapp/2;
+          V_APP_BL1(Read_coloumn) = 0;
+
+        % Assigning initial voltage guess
+          parfor i = 1:m
+              for j = 1:n
+                  V(i,j) = V_APP_WL1(i) - V_APP_BL1(j);
+              end
+          end
+        
+          error = 2;
+          % A while loop is used to keep iterating the code until a desired accuracy
+          % is achieved
+          while error > pass
+              % Calculating the array resistances
+              parfor i = 1:m
+                  for j = 1:n
+                      if R(i,j) == 0
+                          I_first = poole_rst(V(i,j),Vth_RESET(i,j));
+                          I_second = poole_rst(V(i,j)+0.01,Vth_RESET(i,j));
+                          RR(i,j) = 0.01/(I_second-I_first);
+                      else
+                          I_first = poole(V(i,j),Vth_SET(i,j));
+                          I_second = poole(V(i,j)+0.01,Vth_SET(i,j));
+                          RR(i,j) = 0.01/(I_second-I_first);
+                      end                      
+                  end
+              end
+
+
+              % Define the matrix A
+              tv = cell(1,m);
+              parfor i = 1:m
+                  A = sparse((zeros(n,n)));
+                  for j = 1:n
+                      if j == 1
+                          A(j,j) = (1/(R_S_WL1(i)))+1/(RR(i,j))+1/R_WL;
+                          A(j,j+1) = -1/R_WL;
+                      elseif j == n
+                          A(j,j) = (1/(R_S_WL2(i)))+1/(RR(i,j))+1/R_WL;
+                          A(j,j-1) = -1/R_WL;
+                      else
+                          A(j,j-1) = -1/R_WL;
+                          A(j,j) = (1/RR(i,j))+(2/R_WL);
+                          A(j,j+1) = -1/R_WL;
+                      end
+                  end
+                  tv{i} = A;
+              end
+              AA = blkdiag(tv{:});
+              tv = cell(1,m);
+
+
+              % Define the matrix B
+              parfor i = 1:m
+                  B = sparse((zeros(n,n)));
+                  for j = 1:n
+                      B(j,j) = -1/(RR(i,j));
+                  end
+                  tv{i} = B;
+              end
+              BB = blkdiag(tv{:});
+
+
+              % Define the matrix C
+              tv = cell(1,n);
+              parfor j = 1:n
+                  C = sparse(zeros(n,m*n));
+                  for i = 1:m
+                      C(i,n*(i-1)+j) = 1/(RR(i,j));
+                  end
+                  tv{j} = C;
+              end
+              CC = vertcat(tv{:});
+
+
+              % Define the matrix D
+              tv = cell(1,n);
+              parfor j = 1:n
+                  D = sparse((zeros(n,m*n)));
+                  for i = 1:m
+                      if i == 1
+                          D(i,j) = (-1/R_S_BL1(j))+(-1/R_BL)+(-1/RR(i,j));
+                          D(i, n*i+j) = 1/R_BL;
+                      elseif i == m
+                          D(i,n*(i-2)+j) = 1/R_BL;
+                          D(i, n*(i-1)+j) = (-1/R_S_BL2(j))+(-1/RR(i,j))+(-1/R_BL);
+                      else
+                          D(i,n*(i-2)+j) = 1/R_BL;
+                          D(i, n*(i-1)+j) = (-1/R_BL)+(-1/RR(i,j))+(-1/R_BL);
+                          D(i, n*i+j) = 1/R_BL;
+                      end
+                  end
+                  tv{j} = D;
+              end
+              DD = vertcat(tv{:});
+
+
+              % Define the coloumn vector EW
+              tv = cell(1,m);
+              parfor i = 1:m
+                  EW = sparse((zeros(n,1)));
+                  for j = 1:n
+                      if j == 1
+                          EW(j,1) = V_APP_WL1(i)/R_S_WL1(i);
+                      elseif j == n
+                          EW(j,1) = V_APP_WL2(i)/R_S_WL2(i);
+                      else
+                          EW(j,1) = 0;
+                      end
+                  end
+                  tv{i} = EW;
+              end
+              EWEW = vertcat(tv{:});
+
+
+              % Define the coloumn vector EB
+              tv = cell(1,n);
+              parfor j = 1:n
+                  EB = sparse(zeros(m,1));
+                  for i = 1:m
+                      if i == 1
+                          EB(i,1) = -V_APP_BL1(j)/R_S_BL1(j);
+                      elseif i == m
+                          EB(i,1) = -V_APP_BL2(j)/R_S_BL2(j);
+                      else
+                          EB(i,1) = 0;
+                      end
+                  end
+                  tv{j} = EB;
+              end
+              EBEB = vertcat(tv{:});
+
+
+              % Calculating the V coloumn vector [VV]
+              VV = [AA BB; CC DD] \ [EWEW; EBEB];
+
+
+              % Reshaping the voltage vector into a square matrix of bitline and word line voltages
+              V_WL_sq = sparse((reshape(VV(1:m*n),[m,n])).');
+              V_BL_sq = sparse((reshape(VV(((m*n)+1):(2*m*n)),[m,n])).');
+
+
+              % Calculate the currents throughout the array
+              II = sparse(zeros(m,n));
+              PP = sparse(zeros(m,n));
+              parfor i = 1:m
+                  I = sparse((zeros(1,n)));
+                  P = sparse((zeros(1,n)));
+                  for j = 1:n
+                      % Calculating the cells' current using the node voltages obtained previously
+                      I(j) = (V_WL_sq(i,j) - V_BL_sq(i,j))/RR(i,j);
+                  end
+                  II(i,:) = I;
+              end
+              V_temp = abs((V_WL_sq - V_BL_sq)-V);
+              error = max(V_temp(:));
+              V = V_WL_sq - V_BL_sq;
+          end
+          % Calculating the voltage at sense resistor
+          Measurement_V = (sum(II(1:n, Read_coloumn))) * R_Sense;
+          Measurement_V = full(Measurement_V);
+          % Calculating the resistance of the selected cell
+          Measured_RR = (V_APP_WL1(Read_row)-Measurement_V)/(sum(II(1:n, Read_coloumn)));
+          Vapp = Vapp + step_size;
+      end
+          Vapp = Vapp - 2 * step_size;
+          step_size = step_size / 10;
+      end
+      Vapp_rst_max(i, k) = Vapp;
+      delta_Vth_reset(i, k) = Vapp -Vth_RESET(m,n);
+
+
+       %Vapp_rst_min
+      % 배열 크기 및 set 설정 (배열 크기 수정 필요)
+      R(1:m,1:n) = 0;
+
+
+      % Choosing the position of the read cell
+      Read_row = 1;
+      Read_coloumn = 1;
+      % make worst case 바꿔야되는 부분
+      R(Read_row, Read_coloumn) = 0;
+
+
+      % sigma level
+      RBER = 1 / (m * n);
+      RBER_sig = -norminv(RBER);
+
+
+      % worst case cell(m,n) has maximum OTS_Vth
+      OTS_Vth(1,1) = - RBER_sig * std_dev + OTS_Vth_mean;
+
+
+      OTS_Ith = 1e-6;
+      Vth_SET = OTS_Vth + OTS_Ith * R_l;
+      Vth_RESET = OTS_Vth + OTS_Ith * R_h;
+
+
+      % Assigning the sense resistors for WL and BL
+      R_S_WL1(1:m) = 10;
+      R_S_WL1(Read_row) = 10;
+      R_S_BL1(1:n) = 10;
+      R_S_BL1(Read_coloumn) = R_Sense;
+      R_S_WL2(1:m) = 10^8;
+      R_S_BL2(1:n) = 10^8;
+
+      V_APP_WL2(1:m) = 0;
+      V_APP_WL2(Read_row) = 0;
+      V_APP_BL2(1:n) = 0;
+      V_APP_BL2(Read_coloumn) = 0;
+
+      % 초기화
+      V = zeros(m, n);
+      error = 2;
+      Vapp = Vth_RESET(1,1); % Selected cell의 Vth값 초기화
+      step_size = 0.01;
+    
+      while step_size > 0.00001
+      % Vth_SET과 Vth_RESET을 select셀의 상태에 따라서 수동으로 바꿔주세요
+      V(1,1) = 0;
+      while V(1,1) < Vth_RESET(1,1)
+          % Assigning applied voltages at the WLs and BLs
+          V_APP_WL1(1:m) = Vapp/2;
+          V_APP_WL1(Read_row) = Vapp;
+          V_APP_BL1(1:n) = Vapp/2;
+          V_APP_BL1(Read_coloumn) = 0;
+          V1(m,n) = V(m,n);
+
+          % Assigning initial voltage guess
+          parfor i = 1:m
+              for j = 1:n
+                  V(i,j) = V_APP_WL1(i) - V_APP_BL1(j);
+              end
+          end
+          V2(m,n) = V(m,n);
+        
+          error = 2;
+          % A while loop is used to keep iterating the code until a desired accuracy
+          % is achieved
+          while error > pass
+              % Calculating the array resistances
+              parfor i = 1:m
+                  for j = 1:n
+                      if R(i,j) == 0
+                          I_first = poole_rst(V(i,j),Vth_RESET(i,j));
+                          I_second = poole_rst(V(i,j)+0.01,Vth_RESET(i,j));
+                          RR(i,j) = 0.01/(I_second-I_first);
+                      else
+                          I_first = poole(V(i,j),Vth_SET(i,j));
+                          I_second = poole(V(i,j)+0.01,Vth_SET(i,j));
+                          RR(i,j) = 0.01/(I_second-I_first);
+                      end                      
+                  end
+              end
+
+
+
+
+              % Define the matrix A
+              tv = cell(1,m);
+              parfor i = 1:m
+                  A = sparse((zeros(n,n)));
+                  for j = 1:n
+                      if j == 1
+                          A(j,j) = (1/(R_S_WL1(i)))+1/(RR(i,j))+1/R_WL;
+                          A(j,j+1) = -1/R_WL;
+                      elseif j == n
+                          A(j,j) = (1/(R_S_WL2(i)))+1/(RR(i,j))+1/R_WL;
+                          A(j,j-1) = -1/R_WL;
+                      else
+                          A(j,j-1) = -1/R_WL;
+                          A(j,j) = (1/RR(i,j))+(2/R_WL);
+                          A(j,j+1) = -1/R_WL;
+                      end
+                  end
+                  tv{i} = A;
+              end
+              AA = blkdiag(tv{:});
+              tv = cell(1,m);
+
+
+
+
+              % Define the matrix B
+              parfor i = 1:m
+                  B = sparse((zeros(n,n)));
+                  for j = 1:n
+                      B(j,j) = -1/(RR(i,j));
+                  end
+                  tv{i} = B;
+              end
+              BB = blkdiag(tv{:});
+
+
+
+
+              % Define the matrix C
+              tv = cell(1,n);
+              parfor j = 1:n
+                  C = sparse(zeros(n,m*n));
+                  for i = 1:m
+                      C(i,n*(i-1)+j) = 1/(RR(i,j));
+                  end
+                  tv{j} = C;
+              end
+              CC = vertcat(tv{:});
+
+              % Define the matrix D
+              tv = cell(1,n);
+              parfor j = 1:n
+                  D = sparse((zeros(n,m*n)));
+                  for i = 1:m
+                      if i == 1
+                          D(i,j) = (-1/R_S_BL1(j))+(-1/R_BL)+(-1/RR(i,j));
+                          D(i, n*i+j) = 1/R_BL;
+                      elseif i == m
+                          D(i,n*(i-2)+j) = 1/R_BL;
+                          D(i, n*(i-1)+j) = (-1/R_S_BL2(j))+(-1/RR(i,j))+(-1/R_BL);
+                      else
+                          D(i,n*(i-2)+j) = 1/R_BL;
+                          D(i, n*(i-1)+j) = (-1/R_BL)+(-1/RR(i,j))+(-1/R_BL);
+                          D(i, n*i+j) = 1/R_BL;
+                      end
+                  end
+                  tv{j} = D;
+              end
+              DD = vertcat(tv{:});
+
+              % Define the coloumn vector EW
+              tv = cell(1,m);
+              parfor i = 1:m
+                  EW = sparse((zeros(n,1)));
+                  for j = 1:n
+                      if j == 1
+                          EW(j,1) = V_APP_WL1(i)/R_S_WL1(i);
+                      elseif j == n
+                          EW(j,1) = V_APP_WL2(i)/R_S_WL2(i);
+                      else
+                          EW(j,1) = 0;
+                      end
+                  end
+                  tv{i} = EW;
+              end
+              EWEW = vertcat(tv{:});
+
+              % Define the coloumn vector EB
+              tv = cell(1,n);
+              parfor j = 1:n
+                  EB = sparse(zeros(m,1));
+                  for i = 1:m
+                      if i == 1
+                          EB(i,1) = -V_APP_BL1(j)/R_S_BL1(j);
+                      elseif i == m
+                          EB(i,1) = -V_APP_BL2(j)/R_S_BL2(j);
+                      else
+                          EB(i,1) = 0;
+                      end
+                  end
+                  tv{j} = EB;
+              end
+              EBEB = vertcat(tv{:});
+
+
+
+
+              % Calculating the V coloumn vector [VV]
+              VV = [AA BB; CC DD] \ [EWEW; EBEB];
+
+              % Reshaping the voltage vector into a square matrix of bitline and word line voltages
+              V_WL_sq = sparse((reshape(VV(1:m*n),[m,n])).');
+              V_BL_sq = sparse((reshape(VV(((m*n)+1):(2*m*n)),[m,n])).');
+
+              % Calculate the currents throughout the array
+              II = sparse(zeros(m,n));
+              PP = sparse(zeros(m,n));
+              parfor i = 1:m
+                  I = sparse((zeros(1,n)));
+                  P = sparse((zeros(1,n)));
+                  for j = 1:n
+                      % Calculating the cells' current using the node voltages obtained previously
+                      I(j) = (V_WL_sq(i,j) - V_BL_sq(i,j))/RR(i,j);
+                      % Calculating the cells' power
+                      P(j) = I(j)*(V_WL_sq(i,j) - V_BL_sq(i,j));
+                  end
+                  II(i,:) = I;
+                  PP(i,:) = P;
+              end
+              V_temp = abs((V_WL_sq - V_BL_sq)-V);
+              error = max(V_temp(:));
+              V = V_WL_sq - V_BL_sq;
+          end
+          % Calculating the voltage at sense resistor
+          Measurement_V = (sum(II(1:n, Read_coloumn))) * R_Sense;
+          Measurement_V = full(Measurement_V);
+          % Calculating the resistance of the selected cell
+          Measured_RR = (V_APP_WL1(Read_row)-Measurement_V)/(sum(II(1:n, Read_coloumn)));
+          Vapp = Vapp + step_size;
+      end
+          Vapp = Vapp - 2 * step_size;
+          step_size = step_size / 10;
+      end
+      Vapp_rst_min(i, k) = Vapp;
+
+
+  %Vth_set_max
+      R(1:m,1:n) = 1;
+      % Choosing the position of the read cell
+      Read_row = m;
+      Read_coloumn = n;
+      % make worst case 바꿔야되는 부분
+      R(Read_row, Read_coloumn) = 1;
+
+      % sigma level
+      RBER = 1 / (m * n);
+      RBER_sig = -norminv(RBER);
+
+      % worst case cell(m,n) has maximum OTS_Vth
+      OTS_Vth(m,n) = RBER_sig * std_dev + OTS_Vth_mean;
+
+
+      OTS_Ith = 1e-6;
+      Vth_SET = OTS_Vth + OTS_Ith * R_l;
+      Vth_RESET = OTS_Vth + OTS_Ith * R_h;
+
+
+      % Assigning the sense resistors for WL and BL
+      R_S_WL1(1:m) = 10;
+      R_S_WL1(Read_row) = 10;
+      R_S_BL1(1:n) = 10;
+      R_S_BL1(Read_coloumn) = R_Sense;
+      R_S_WL2(1:m) = 10^8;
+      R_S_BL2(1:n) = 10^8;
+
+      V_APP_WL2(1:m) = 0;
+      V_APP_WL2(Read_row) = 0;
+      V_APP_BL2(1:n) = 0;
+      V_APP_BL2(Read_coloumn) = 0;
+
+
+      % 초기화
+      V = zeros(m, n);
+      error = 2;
+      Vapp = Vth_SET(m,n); % Selected cell의 Vth값 초기화
+      step_size = 0.01;
+
+
+      while step_size > 0.00001
+      % Vth_SET과 Vth_RESET을 select셀의 상태에 따라서 수동으로 바꿔주세요
+      V(m,n)=0;
+      while V(m,n) < Vth_SET(m,n)
+          % Assigning applied voltages at the WLs and BLs
+          V_APP_WL1(1:m) = Vapp/2;
+          V_APP_WL1(Read_row) = Vapp;
+          V_APP_BL1(1:n) = Vapp/2;
+          V_APP_BL1(Read_coloumn) = 0;
+          V1(m,n) = V(m,n);
+
+
+          % Assigning initial voltage guess
+          parfor i = 1:m
+              for j = 1:n
+                  V(i,j) = V_APP_WL1(i) - V_APP_BL1(j);
+              end
+          end
+          V2(m,n) = V(m,n);
+          error = 2;
+
+
+          % A while loop is used to keep iterating the code until a desired accuracy
+          % is achieved
+          while error > pass
+              % Calculating the array resistances
+              parfor i = 1:m
+                  for j = 1:n
+                      if R(i,j) == 0
+                          I_first = poole_rst(V(i,j),Vth_RESET(i,j));
+                          I_second = poole_rst(V(i,j)+0.01,Vth_RESET(i,j));
+                          RR(i,j) = 0.01/(I_second-I_first);
+                      else
+                          I_first = poole(V(i,j),Vth_SET(i,j));
+                          I_second = poole(V(i,j)+0.01,Vth_SET(i,j));
+                          RR(i,j) = 0.01/(I_second-I_first);
+                      end                      
+                  end
+              end
+
+              % Define the matrix A
+              tv = cell(1,m);
+              parfor i = 1:m
+                  A = sparse((zeros(n,n)));
+                  for j = 1:n
+                      if j == 1
+                          A(j,j) = (1/(R_S_WL1(i)))+1/(RR(i,j))+1/R_WL;
+                          A(j,j+1) = -1/R_WL;
+                      elseif j == n
+                          A(j,j) = (1/(R_S_WL2(i)))+1/(RR(i,j))+1/R_WL;
+                          A(j,j-1) = -1/R_WL;
+                      else
+                          A(j,j-1) = -1/R_WL;
+                          A(j,j) = (1/RR(i,j))+(2/R_WL);
+                          A(j,j+1) = -1/R_WL;
+                      end
+                  end
+                  tv{i} = A;
+              end
+              AA = blkdiag(tv{:});
+              tv = cell(1,m);
+
+
+              % Define the matrix B
+              parfor i = 1:m
+                  B = sparse((zeros(n,n)));
+                  for j = 1:n
+                      B(j,j) = -1/(RR(i,j));
+                  end
+                  tv{i} = B;
+              end
+              BB = blkdiag(tv{:});
+
+              % Define the matrix C
+              tv = cell(1,n);
+              parfor j = 1:n
+                  C = sparse(zeros(n,m*n));
+                  for i = 1:m
+                      C(i,n*(i-1)+j) = 1/(RR(i,j));
+                  end
+                  tv{j} = C;
+              end
+              CC = vertcat(tv{:});
+
+              % Define the matrix D
+              tv = cell(1,n);
+              parfor j = 1:n
+                  D = sparse((zeros(n,m*n)));
+                  for i = 1:m
+                      if i == 1
+                          D(i,j) = (-1/R_S_BL1(j))+(-1/R_BL)+(-1/RR(i,j));
+                          D(i, n*i+j) = 1/R_BL;
+                      elseif i == m
+                          D(i,n*(i-2)+j) = 1/R_BL;
+                          D(i, n*(i-1)+j) = (-1/R_S_BL2(j))+(-1/RR(i,j))+(-1/R_BL);
+                      else
+                          D(i,n*(i-2)+j) = 1/R_BL;
+                          D(i, n*(i-1)+j) = (-1/R_BL)+(-1/RR(i,j))+(-1/R_BL);
+                          D(i, n*i+j) = 1/R_BL;
+                      end
+                  end
+                  tv{j} = D;
+              end
+              DD = vertcat(tv{:});
+
+
+              % Define the coloumn vector EW
+              tv = cell(1,m);
+              parfor i = 1:m
+                  EW = sparse((zeros(n,1)));
+                  for j = 1:n
+                      if j == 1
+                          EW(j,1) = V_APP_WL1(i)/R_S_WL1(i);
+                      elseif j == n
+                          EW(j,1) = V_APP_WL2(i)/R_S_WL2(i);
+                      else
+                          EW(j,1) = 0;
+                      end
+                  end
+                  tv{i} = EW;
+              end
+              EWEW = vertcat(tv{:});
+
+              % Define the coloumn vector EB
+              tv = cell(1,n);
+              parfor j = 1:n
+                  EB = sparse(zeros(m,1));
+                  for i = 1:m
+                      if i == 1
+                          EB(i,1) = -V_APP_BL1(j)/R_S_BL1(j);
+                      elseif i == m
+                          EB(i,1) = -V_APP_BL2(j)/R_S_BL2(j);
+                      else
+                          EB(i,1) = 0;
+                      end
+                  end
+                  tv{j} = EB;
+              end
+              EBEB = vertcat(tv{:});
+
+              % Calculating the V coloumn vector [VV]
+              VV = [AA BB; CC DD] \ [EWEW; EBEB];
+
+              % Reshaping the voltage vector into a square matrix of bitline and word line voltages
+              V_WL_sq = sparse((reshape(VV(1:m*n),[m,n])).');
+              V_BL_sq = sparse((reshape(VV(((m*n)+1):(2*m*n)),[m,n])).');
+
+
+              % Calculate the currents throughout the array
+              II = sparse(zeros(m,n));
+              PP = sparse(zeros(m,n));
+              parfor i = 1:m
+                  I = sparse((zeros(1,n)));
+                  P = sparse((zeros(1,n)));
+                  for j = 1:n
+                      % Calculating the cells' current using the node voltages obtained previously
+                      I(j) = (V_WL_sq(i,j) - V_BL_sq(i,j))/RR(i,j);
+                      % Calculating the cells' power
+                      P(j) = I(j)*(V_WL_sq(i,j) - V_BL_sq(i,j));
+                  end
+                  II(i,:) = I;
+                  PP(i,:) = P;
+              end
+              V_temp = abs((V_WL_sq - V_BL_sq)-V);
+              error = max(V_temp(:));
+              V = V_WL_sq - V_BL_sq;
+          end
+          % Calculating the voltage at sense resistor
+          Measurement_V = (sum(II(1:n, Read_coloumn))) * R_Sense;
+          Measurement_V = full(Measurement_V);
+          % Calculating the resistance of the selected cell
+          Measured_RR = (V_APP_WL1(Read_row)-Measurement_V)/(sum(II(1:n, Read_coloumn)));
+          Vapp = Vapp + step_size;
+      end
+          Vapp = Vapp - 2 * step_size;
+          step_size = step_size / 10;
+      end
+      Vapp_set_max(i, k) = Vapp;
+      delta_Vth_set(i, k) = Vapp - Vth_SET(m,n);
+
+  %Vth_set_min
+      R(1:m,1:n) = 0;
+      % Choosing the position of the read cell
+      Read_row = 1;
+      Read_coloumn = 1;
+      % make worst case 바꿔야되는 부분
+      R(Read_row, Read_coloumn) = 1;
+
+      % sigma level
+      RBER = 1 / (m * n);
+      RBER_sig = -norminv(RBER);
+
+
+      % worst case cell(m,n) has maximum OTS_Vth
+      OTS_Vth(1,1) = - RBER_sig * std_dev + OTS_Vth_mean;
+
+      OTS_Ith = 1e-6;
+      Vth_SET = OTS_Vth + OTS_Ith * R_l;
+      Vth_RESET = OTS_Vth + OTS_Ith * R_h;
+
+      % Assigning the sense resistors for WL and BL
+      R_S_WL1(1:m) = 10;
+      R_S_WL1(Read_row) = 10;
+      R_S_BL1(1:n) = 10;
+      R_S_BL1(Read_coloumn) = R_Sense;
+      R_S_WL2(1:m) = 10^8;
+      R_S_BL2(1:n) = 10^8;
+
+
+      V_APP_WL2(1:m) = 0;
+      V_APP_WL2(Read_row) = 0;
+      V_APP_BL2(1:n) = 0;
+      V_APP_BL2(Read_coloumn) = 0;
+
+
+      % 초기화
+      V = zeros(m, n);
+      error = 2;
+      Vapp = Vth_SET(1,1); % Selected cell의 Vth값 초기화
+      step_size = 0.01;
+      while step_size > 0.00001
+      % Vth_SET과 Vth_RESET을 select셀의 상태에 따라서 수동으로 바꿔주세요
+      V(1,1) = 0;
+      while V(1,1) < Vth_SET(1,1)
+          % Assigning applied voltages at the WLs and BLs
+          V_APP_WL1(1:m) = Vapp/2;
+          V_APP_WL1(Read_row) = Vapp;
+          V_APP_BL1(1:n) = Vapp/2;
+          V_APP_BL1(Read_coloumn) = 0;
+          V1(m,n) = V(m,n);
+
+          % Assigning initial voltage guess
+          parfor i = 1:m
+              for j = 1:n
+                  V(i,j) = V_APP_WL1(i) - V_APP_BL1(j);
+              end
+          end
+          V2(m,n) = V(m,n);
+          error = 2;
+
+          % A while loop is used to keep iterating the code until a desired accuracy
+          % is achieved
+          while error > pass
+              % Calculating the array resistances
+              parfor i = 1:m
+                  for j = 1:n
+                      if R(i,j) == 0
+                          I_first = poole_rst(V(i,j),Vth_RESET(i,j));
+                          I_second = poole_rst(V(i,j)+0.01,Vth_RESET(i,j));
+                          RR(i,j) = 0.01/(I_second-I_first);
+                      else
+                          I_first = poole(V(i,j),Vth_SET(i,j));
+                          I_second = poole(V(i,j)+0.01,Vth_SET(i,j));
+                          RR(i,j) = 0.01/(I_second-I_first);
+                      end                         
+                  end
+              end
+
+              % Define the matrix A
+              tv = cell(1,m);
+              parfor i = 1:m
+                  A = sparse((zeros(n,n)));
+                  for j = 1:n
+                      if j == 1
+                          A(j,j) = (1/(R_S_WL1(i)))+1/(RR(i,j))+1/R_WL;
+                          A(j,j+1) = -1/R_WL;
+                      elseif j == n
+                          A(j,j) = (1/(R_S_WL2(i)))+1/(RR(i,j))+1/R_WL;
+                          A(j,j-1) = -1/R_WL;
+                      else
+                          A(j,j-1) = -1/R_WL;
+                          A(j,j) = (1/RR(i,j))+(2/R_WL);
+                          A(j,j+1) = -1/R_WL;
+                      end
+                  end
+                  tv{i} = A;
+              end
+              AA = blkdiag(tv{:});
+              tv = cell(1,m);
+
+
+              % Define the matrix B
+              parfor i = 1:m
+                  B = sparse((zeros(n,n)));
+                  for j = 1:n
+                      B(j,j) = -1/(RR(i,j));
+                  end
+                  tv{i} = B;
+              end
+              BB = blkdiag(tv{:});
+
+              % Define the matrix C
+              tv = cell(1,n);
+              parfor j = 1:n
+                  C = sparse(zeros(n,m*n));
+                  for i = 1:m
+                      C(i,n*(i-1)+j) = 1/(RR(i,j));
+                  end
+                  tv{j} = C;
+              end
+              CC = vertcat(tv{:});
+
+
+
+
+              % Define the matrix D
+              tv = cell(1,n);
+              parfor j = 1:n
+                  D = sparse((zeros(n,m*n)));
+                  for i = 1:m
+                      if i == 1
+                          D(i,j) = (-1/R_S_BL1(j))+(-1/R_BL)+(-1/RR(i,j));
+                          D(i, n*i+j) = 1/R_BL;
+                      elseif i == m
+                          D(i,n*(i-2)+j) = 1/R_BL;
+                          D(i, n*(i-1)+j) = (-1/R_S_BL2(j))+(-1/RR(i,j))+(-1/R_BL);
+                      else
+                          D(i,n*(i-2)+j) = 1/R_BL;
+                          D(i, n*(i-1)+j) = (-1/R_BL)+(-1/RR(i,j))+(-1/R_BL);
+                          D(i, n*i+j) = 1/R_BL;
+                      end
+                  end
+                  tv{j} = D;
+              end
+              DD = vertcat(tv{:});
+
+
+
+
+              % Define the coloumn vector EW
+              tv = cell(1,m);
+              parfor i = 1:m
+                  EW = sparse((zeros(n,1)));
+                  for j = 1:n
+                      if j == 1
+                          EW(j,1) = V_APP_WL1(i)/R_S_WL1(i);
+                      elseif j == n
+                          EW(j,1) = V_APP_WL2(i)/R_S_WL2(i);
+                      else
+                          EW(j,1) = 0;
+                      end
+                  end
+                  tv{i} = EW;
+              end
+              EWEW = vertcat(tv{:});
+
+
+
+
+              % Define the coloumn vector EB
+              tv = cell(1,n);
+              parfor j = 1:n
+                  EB = sparse(zeros(m,1));
+                  for i = 1:m
+                      if i == 1
+                          EB(i,1) = -V_APP_BL1(j)/R_S_BL1(j);
+                      elseif i == m
+                          EB(i,1) = -V_APP_BL2(j)/R_S_BL2(j);
+                      else
+                          EB(i,1) = 0;
+                      end
+                  end
+                  tv{j} = EB;
+              end
+              EBEB = vertcat(tv{:});
+
+
+
+
+              % Calculating the V coloumn vector [VV]
+              VV = [AA BB; CC DD] \ [EWEW; EBEB];
+
+
+
+
+              % Reshaping the voltage vector into a square matrix of bitline and word line voltages
+              V_WL_sq = sparse((reshape(VV(1:m*n),[m,n])).');
+              V_BL_sq = sparse((reshape(VV(((m*n)+1):(2*m*n)),[m,n])).');
+
+
+
+
+              % Calculate the currents throughout the array
+              II = sparse(zeros(m,n));
+              PP = sparse(zeros(m,n));
+              parfor i = 1:m
+                  I = sparse((zeros(1,n)));
+                  P = sparse((zeros(1,n)));
+                  for j = 1:n
+                      % Calculating the cells' current using the node voltages obtained previously
+                      I(j) = (V_WL_sq(i,j) - V_BL_sq(i,j))/RR(i,j);
+                      % Calculating the cells' power
+                      P(j) = I(j)*(V_WL_sq(i,j) - V_BL_sq(i,j));
+                  end
+                  II(i,:) = I;
+                  PP(i,:) = P;
+              end
+              V_temp = abs((V_WL_sq - V_BL_sq)-V);
+              error = max(V_temp(:));
+              V = V_WL_sq - V_BL_sq;
+          end
+          % Calculating the voltage at sense resistor
+          Measurement_V = (sum(II(1:n, Read_coloumn))) * R_Sense;
+          Measurement_V = full(Measurement_V);
+          % Calculating the resistance of the selected cell
+          Measured_RR = (V_APP_WL1(Read_row)-Measurement_V)/(sum(II(1:n, Read_coloumn)));
+          Vapp = Vapp + step_size;
+      end
+          Vapp = Vapp - 2 * step_size;
+          step_size = step_size / 10;
+      end
+      Vapp_set_min(i, k) = Vapp;
+      percent = ((k-1)*length(OTS_Vth_means)+i)/(length(OTS_Vth_means)*length(array_sizes))
+  end
+end
+
+
+% RWM 및 IFM 계산
+RWM = Vapp_rst_min - Vapp_set_max;
+IFM = Vapp_set_min - (Vapp_rst_max./2);
+
+
+% Mesh plot 생성
+[X, Y] = meshgrid(array_sizes, OTS_Vth_means);
+
+% RWM에 대한 surf plot
+figure;
+surf(X, Y, delta_Vth_reset);
+xlabel('Array Size');
+ylabel('OTS Vth Mean');
+zlabel('delta_Vth_reset');
+title('delta_Vth_reset vs Array Size and OTS Vth Mean');
+colormap(jet); % 컬러맵을 jet으로 설정 (빨간색에서 파란색으로 변화)
+colorbar;
+shading interp; % 면을 부드럽게 보이도록 설정
+hold on;
+
+
+hold off;
+
+% IFM에 대한 surf plot
+figure;
+surf(X, Y, IFM);
+xlabel('Array Size');
+ylabel('OTS Vth Mean');
+zlabel('IFM');
+title('IFM vs Array Size and OTS Vth Mean');
+colormap(jet); % 컬러맵을 jet으로 설정 (빨간색에서 파란색으로 변화)
+colorbar;
+shading interp; % 면을 부드럽게 보이도록 설정
+hold on;
+
+
+hold off;
+
