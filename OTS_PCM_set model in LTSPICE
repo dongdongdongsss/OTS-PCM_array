@@ -1,0 +1,20 @@
+*ots+pcm
+.SUBCKT ots+pcm_set 1 2 params:
++ OTS_Vth=2.95 OTS_Ith=1e-6 Vhold_on=1.1 R_ON=4e3 R_SET=4e3 R_RESET=1.004e6
+*State variable:
+.param q=1.6e-19 A=9e-16 NTtot=4.6e24 T0=1e-15 kT=0.026 ua=300e-10 dz=6e-9
+.param Vth_SET=OTS_Vth + OTS_Ith * R_SET
+.param Vth_RESET=OTS_Vth + OTS_Ith * R_RESET
+*State : reset = 0, set = 1
+.param State = 1
+****************************************
+*poole Frenkel equation function
+
+.func Ea(var1) {0.1*var1+0.2125}
+.func poole(var1,var2) {2*q*A*NTtot*dz/T0*exp(-Ea(var2)/0.026)*sinh((var1)*dz/kT/2/ua)}
+.func poole_rst(va,var) {2*q*A*NTtot*dz/T0*exp(-Ea(var)/0.026)*sinh(va*dz/kT/2/ua)*((-4)/(var*var-3.47*var+3.01035)*va^2+(-3.47)*(-4)/(var*var-3.47*var+3.01035)*va+(5+3.01035*(-4)/(var*var-3.47*var+3.01035)))}
+****************************************
+*Output:
+Bpf 1 2 I = if( State, if(V(1,2) < Vth_SET, poole(V(1,2),Vth_SET), (V(1,2)-1.1)/4000), if(V(1,2) < Vth_RESET, poole_rst(V(1,2),Vth_RESET), (V(1,2)-1.1)/4000))
+
+.ENDS ots+pcm_set
